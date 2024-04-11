@@ -25,16 +25,17 @@ void CACHE::handle_fill()
         uint32_t mshr_index = MSHR.next_fill_index;
 
         // find victim
-        uint32_t set = get_set(MSHR.entry[mshr_index].address), way;
+        uint32_t set = get_set_redirect(MSHR.entry[mshr_index].address), way;
         if (cache_type == IS_LLC) {
         	if(warmup_complete[fill_cpu]){
-          evictions[set]++;
-          temp_evictions[set]++;
-          evictions_count++;
-          if(evictions_count % 1000 == 0){
-            cout << "Eviction count: " << evictions_count << endl;
-            print_evictions();
-          }
+              int evict_set = get_set(MSHR.entry[mshr_index].address);             
+              evictions[evict_set]++;
+              temp_evictions[evict_set]++;
+              evictions_count++;
+            if(evictions_count == 10000){
+                cout << "Eviction count: " << evictions_count << endl;
+                print_evictions();
+            }
           //if evictions are crossing a certain threshold 
         }
             way = llc_find_victim(fill_cpu, MSHR.entry[mshr_index].instr_id, set, block[set], MSHR.entry[mshr_index].ip, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].type);
@@ -251,8 +252,8 @@ void CACHE::handle_writeback()
         int index = WQ.head;
 
         // access cache
-        uint32_t set = get_set(WQ.entry[index].address);
-        int way = check_hit(&WQ.entry[index]);
+        int set, way;
+        std::tie(set, way) = check_hit(&WQ.entry[index]);
         
         if (way >= 0) { // writeback hit (or RFO hit for L1D)
 
@@ -411,16 +412,18 @@ void CACHE::handle_writeback()
             }
             else {
                 // find victim
-                uint32_t set = get_set(WQ.entry[index].address), way;
+                uint32_t set = get_set_redirect(WQ.entry[index].address), way;
                 if (cache_type == IS_LLC) {
                     way = llc_find_victim(writeback_cpu, WQ.entry[index].instr_id, set, block[set], WQ.entry[index].ip, WQ.entry[index].full_addr, WQ.entry[index].type);
-                        if(warmup_complete[writeback_cpu]){evictions[set]++;
-                        evictions_count++;
-                        temp_evictions[set]++;
-                        if(evictions_count % 1000 == 0){
-                          cout << "Eviction count: " << evictions_count << endl;
-                          print_evictions();
-                        }
+                        if(warmup_complete[writeback_cpu]){
+                            int evict_set = get_set(WQ.entry[index].address);
+                            evictions[evict_set]++;
+                            evictions_count++;
+                            temp_evictions[evict_set]++;
+                            if(evictions_count == 10000){
+                                cout << "Eviction count: " << evictions_count << endl;
+                                print_evictions();
+                            }
                         //if evictions are crossing a certain threshold 
                       }
                 }
@@ -559,9 +562,9 @@ void CACHE::handle_read()
             int index = RQ.head;
 
             // access cache
-            uint32_t set = get_set(RQ.entry[index].address);
-            int way = check_hit(&RQ.entry[index]);
-            
+            int set, way;
+            std::tie(set, way) = check_hit(&RQ.entry[index]);
+
             if (way >= 0) { // read hit
 
                 if (cache_type == IS_ITLB) {
@@ -862,9 +865,9 @@ void CACHE::handle_prefetch()
             int index = PQ.head;
 
             // access cache
-            uint32_t set = get_set(PQ.entry[index].address);
-            int way = check_hit(&PQ.entry[index]);
-            
+            int set, way;
+            std::tie(set, way) = check_hit(&PQ.entry[index]);
+
             if (way >= 0) { // prefetch hit
 
                 // update replacement policy
@@ -1082,6 +1085,17 @@ uint32_t CACHE::get_set(uint64_t address)
 	//UTK_trying to count the number of times a particular set is accessed
 	uint32_t val= (uint32_t) (address & ((1 << lg2(NUM_SET)) - 1));
 	access[val]++;
+ 
+	return val;
+    //return (uint32_t) (address & ((1 << lg2(NUM_SET)) - 1)); //UTK_commented out
+}
+
+
+uint32_t CACHE::get_set_redirect(uint64_t address)
+{
+	//UTK_trying to count the number of times a particular set is accessed
+	uint32_t val= (uint32_t) (address & ((1 << lg2(NUM_SET)) - 1));
+	access[val]++;
   if(cache_type == IS_LLC)
     {
       if(redirect_lookup.find(val) != redirect_lookup.end()) return redirect_lookup[val];
@@ -1149,7 +1163,7 @@ void CACHE::fill_cache(uint32_t set, uint32_t way, PACKET *packet)
     cout << " data: " << block[set][way].data << dec << endl; });
 }
 
-int CACHE::check_hit(PACKET *packet)
+std::pair<int, int> CACHE::check_hit(PACKET *packet)
 {
     uint32_t set = get_set(packet->address);
     int match_way = -1;
@@ -1173,11 +1187,28 @@ int CACHE::check_hit(PACKET *packet)
             cout << " set: " << set << " way: " << way << " lru: " << block[set][way].lru;
             cout << " event: " << packet->event_cycle << " cycle: " << current_core_cycle[cpu] << endl; });
 
-            break;
+            return make_pair(set, way);
         }
     }
 
-    return match_way;
+    set = get_set_redirect(packet->address);
+
+     for (uint32_t way=0; way<NUM_WAY; way++) {
+        if (block[set][way].valid && (block[set][way].tag == packet->address)) {
+
+            match_way = way;
+
+            DP ( if (warmup_complete[packet->cpu]) {
+            cout << "[" << NAME << "] " << __func__ << " instr_id: " << packet->instr_id << " type: " << +packet->type << hex << " addr: " << packet->address;
+            cout << " full_addr: " << packet->full_addr << " tag: " << block[set][way].tag << " data: " << block[set][way].data << dec;
+            cout << " set: " << set << " way: " << way << " lru: " << block[set][way].lru;
+            cout << " event: " << packet->event_cycle << " cycle: " << current_core_cycle[cpu] << endl; });
+
+            return make_pair(set, way);
+        }
+    }
+
+    return make_pair(get_set(packet->address), -1);
 }
 
 int CACHE::invalidate_entry(uint64_t inval_addr)
@@ -1204,11 +1235,29 @@ int CACHE::invalidate_entry(uint64_t inval_addr)
             cout << " tag: " << block[set][way].tag << " data: " << block[set][way].data << dec;
             cout << " set: " << set << " way: " << way << " lru: " << block[set][way].lru << " cycle: " << current_core_cycle[cpu] << endl; });
 
-            break;
+            return match_way;
         }
     }
 
-    return match_way;
+    set = get_set_redirect(inval_addr);
+
+    for (uint32_t way=0; way<NUM_WAY; way++) {
+        if (block[set][way].valid && (block[set][way].tag == inval_addr)) {
+
+            block[set][way].valid = 0;
+
+            match_way = way;
+
+            DP ( if (warmup_complete[cpu]) {
+            cout << "[" << NAME << "] " << __func__ << " inval_addr: " << hex << inval_addr;  
+            cout << " tag: " << block[set][way].tag << " data: " << block[set][way].data << dec;
+            cout << " set: " << set << " way: " << way << " lru: " << block[set][way].lru << " cycle: " << current_core_cycle[cpu] << endl; });
+
+            return match_way;
+        }
+    }
+
+    return -1;
 }
 
 int CACHE::add_rq(PACKET *packet)
@@ -1849,7 +1898,7 @@ void CACHE::print_evictions() {
             eviction_map[classification1[i].first] += "4";
         }
         for(int i=0;i<1024;i++){
-            redirect_lookup[classification1[2047-i].first]=classification1[i].first;
+            redirect_lookup[classification[2047-i].first]=classification[i].first;
         }
         for(int i=0;i<2048;i++){
           temp_evictions[i]=0;
