@@ -1827,6 +1827,35 @@ uint32_t CACHE::get_size(uint8_t queue_type, uint64_t address)
 
     return 0;
 }
+void CACHE::print_set_type(){
+    vector<pair<int,int>>v;
+    for(int i=0;i<2048;i++)
+    {
+         v.push_back(make_pair(evictions[i],i));
+
+    }
+    sort(v.begin(),v.end());
+    int i=v.size()-1;
+    int j=512;
+    while(j--)
+    {
+       cout<<"Set"<<v[i].second<<" Very hot set\n";
+       i--;
+    }
+    j=512;
+    while(j--)
+    {
+       cout<<"Set"<<v[i].second<<" Hot set\n";
+       i--;
+    }
+    j=1024;
+    while(j--)
+    {
+       cout<<"Set"<<v[i].second<<" Cold set\n";
+       i--;
+    }
+}
+
 
 bool sortBySecond(const std::pair<int, uint64_t> &a, const std::pair<int, uint64_t> &b) {
     return a.second < b.second;
