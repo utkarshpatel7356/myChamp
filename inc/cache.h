@@ -184,7 +184,8 @@ class CACHE : public MEMORY {
     void return_data(PACKET *packet),
          operate(),
          increment_WQ_FULL(uint64_t address),
-         print_evictions();
+         print_evictions(),
+	 print_set_type();
 
          
 
